@@ -54,7 +54,7 @@ def main(config_path):
         mp.spawn(trainer.train, nprocs=ngpus, args=())
     else:
         trainer.train(load=load, saliency_maps=saliency_maps, test=test)
-    '''
+
     trainer.kaggle_test()
 
     # from tensorboardX import SummaryWriter
@@ -69,9 +69,9 @@ def main(config_path):
     for i in range(64):
         visualizer.visualise_layer(visualizer.model.features[0], i)
     # 3
-    '''
+
     from lime_2 import lime_wrapper
-    image_count = 0
+    image_count = 100
     lime_wrapper(trainer, image_count)
     # 4
     # from visualize_features import visualize_features

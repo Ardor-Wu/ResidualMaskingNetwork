@@ -205,7 +205,7 @@ def lime_wrapper(trainer, image_count):
             i += 1
             if i >= image_count:
                 break
-    i = 100
+
     with torch.no_grad():
         j = 0
         for (images, targets) in trainer._val_batch_1_loader:
