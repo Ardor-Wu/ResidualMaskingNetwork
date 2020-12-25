@@ -29,7 +29,6 @@ from utils.metrics.segment_metrics import eval_metrics
 from utils.metrics.metrics import accuracy
 from utils.generals import make_batch
 
-
 EMO_DICT = {0: "ne", 1: "an", 2: "di", 3: "fe", 4: "ha", 5: "sa", 6: "su"}
 
 
@@ -123,6 +122,13 @@ class FER2013Trainer(Trainer):
                 pin_memory=True,
                 shuffle=False,
             )
+            self._val_batch_1_loader = DataLoader(
+                self._val_set,
+                batch_size=1,
+                num_workers=self._num_workers,
+                pin_memory=True,
+                shuffle=False,
+            )
 
         # define loss function (criterion) and optimizer
         class_weights = [
@@ -207,7 +213,7 @@ class FER2013Trainer(Trainer):
         train_acc = 0.0
 
         for i, (images, targets) in tqdm(
-            enumerate(self._train_loader), total=len(self._train_loader), leave=False
+                enumerate(self._train_loader), total=len(self._train_loader), leave=False
         ):
             images = images.cuda(non_blocking=True)
             targets = targets.cuda(non_blocking=True)
@@ -238,7 +244,7 @@ class FER2013Trainer(Trainer):
 
         with torch.no_grad():
             for i, (images, targets) in tqdm(
-                enumerate(self._val_loader), total=len(self._val_loader), leave=False
+                    enumerate(self._val_loader), total=len(self._val_loader), leave=False
             ):
                 images = images.cuda(non_blocking=True)
                 targets = targets.cuda(non_blocking=True)
@@ -263,14 +269,13 @@ class FER2013Trainer(Trainer):
         f = open("private_test_log.txt", "w")
         with torch.no_grad():
             for i, (images, targets) in tqdm(
-                enumerate(self._test_loader), total=len(self._test_loader), leave=False
+                    enumerate(self._test_loader), total=len(self._test_loader), leave=False
             ):
-
                 images = images.cuda(non_blocking=True)
                 targets = targets.cuda(non_blocking=True)
 
                 outputs = self._model(images)
-                print(outputs.shape, outputs)
+                # print(outputs.shape, outputs)
                 acc = accuracy(outputs, targets)[0]
                 test_acc += acc.item()
                 f.writelines("{}_{}\n".format(i, acc.item()))
@@ -293,7 +298,7 @@ class FER2013Trainer(Trainer):
 
         with torch.no_grad():
             for idx in tqdm(
-                range(len(self._test_set)), total=len(self._test_set), leave=False
+                    range(len(self._test_set)), total=len(self._test_set), leave=False
             ):
                 images, targets = self._test_set[idx]
                 targets = torch.LongTensor([targets])
@@ -320,7 +325,7 @@ class FER2013Trainer(Trainer):
         f.close()
         return test_acc
 
-    def train(self):
+    def train(self, test=True, load=False, saliency_maps=0):
         """make a training job"""
         # print(self._model)
 
@@ -338,40 +343,48 @@ class FER2013Trainer(Trainer):
           """
 
         # exit(0)
+        if not load:  # my
+            try:
+                while not self._is_stop():
+                    self._increase_epoch_num()  # epoch+=1
+                    self._train()  # 训练一轮
+                    self._val()  # validation一轮
 
-        try:
-            while not self._is_stop():
-                self._increase_epoch_num()
-                self._train()
-                self._val()
-
-                self._update_training_state()
-                self._logging()
-        except KeyboardInterrupt:
-            traceback.print_exc()
-            pass
-
+                    self._update_training_state()  # 更新训练状态
+                    self._logging()  # 产生日志
+            except KeyboardInterrupt:  # debug
+                traceback.print_exc()
+                pass
         # training stop
         try:
-            # state = torch.load('saved/checkpoints/resatt18_rot30_2019Nov06_18.56')
-            state = torch.load(self._checkpoint_path)
+            if load:
+                state = torch.load('saved/checkpoints/alexnet__n_2020Dec08_11.41')
+            else:
+                state = torch.load(self._checkpoint_path)
+            # 分布式系统特殊处理
             if self._distributed:
                 self._model.module.load_state_dict(state["net"])
             else:
                 self._model.load_state_dict(state["net"])
-
-            if not self._test_set.is_tta():
-                self._test_acc = self._calc_acc_on_private_test()
-            else:
-                self._test_acc = self._calc_acc_on_private_test_with_tta()
-
-            # self._test_acc = self._calc_acc_on_private_test()
-            self._save_weights()
-        except Exception as e:
+            # my work
+            if saliency_maps > 0:
+                self.do_saliency_map(saliency_maps)
+            #
+            if test:
+                # 计算准确率
+                if not self._test_set.is_tta():
+                    self._test_acc = self._calc_acc_on_private_test()
+                else:
+                    self._test_acc = self._calc_acc_on_private_test_with_tta()
+                # self._test_acc = self._calc_acc_on_private_test()
+                if not load:
+                    self._save_weights()
+        except Exception as e:  # debug
             traceback.print_exc()
             pass
 
         consume_time = str(datetime.datetime.now() - self._start_time)
+        # 输出总结信息
         self._writer.add_text(
             "Summary",
             "Converged after {} epochs, consume {}".format(
@@ -437,8 +450,8 @@ class FER2013Trainer(Trainer):
     def _is_stop(self):
         """check stop condition"""
         return (
-            self._plateau_count > self._max_plateau_count
-            or self._current_epoch_num > self._max_epoch_num
+                self._plateau_count > self._max_plateau_count
+                or self._current_epoch_num > self._max_epoch_num
         )
 
     def _increase_epoch_num(self):
@@ -465,3 +478,54 @@ class FER2013Trainer(Trainer):
         }
 
         torch.save(state, self._checkpoint_path)
+
+    def do_saliency_map(self, saliency_maps):
+        path = "./result/saliency_map"
+        if not os.path.exists(path):
+            os.makedirs(path)
+        for i, (images, targets) in tqdm(
+                enumerate(self._val_batch_1_loader), total=saliency_maps, leave=False
+        ):
+            plt.imshow(images[0][0].detach().cpu().numpy())
+            plt.axis('off')
+
+            plt.savefig("./result/saliency_map/" + str(i) + "_image.png")
+            plt.show()
+            images = images.cuda(non_blocking=True)
+            targets = targets.cuda(non_blocking=True)
+
+            # compute output, measure accuracy and record loss
+            images.requires_grad_()
+            outputs = self._model(images)
+            score_max_index = outputs.argmax(dim=1)
+            score_max = outputs[0, score_max_index]
+            score_max.backward()
+            # saliency, _ = torch.max(images.grad.data.abs(), dim=1)
+            saliency = abs(images.grad.data.cpu())
+            # code to plot the saliency map as a heatmap
+            plt.imshow(saliency[0][0], cmap=plt.cm.hot)
+            plt.axis('off')
+
+            plt.savefig("./result/saliency_map/" + str(i) + "_map.png")
+            plt.show()
+            saliency_maps -= 1
+            if saliency_maps == 0:
+                break
+
+    def kaggle_test(self):
+        self._model.eval()
+        print("Testing")
+        f = open("res.csv", "w")
+        f.writelines("{},{}\n".format("ID", "emotion"))
+        with torch.no_grad():
+            for i, (images, targets) in tqdm(
+                    enumerate(self._test_loader), total=len(self._test_loader), leave=False
+            ):
+                images = images.cuda(non_blocking=True)
+                outputs = self._model(images)
+                predicted_target = outputs.argmax()
+                f.writelines("{},{}\n".format(i + 1, predicted_target))
+
+        print("Test done!")
+        f.close()
+        return

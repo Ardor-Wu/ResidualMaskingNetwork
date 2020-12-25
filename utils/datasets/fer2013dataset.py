@@ -7,7 +7,6 @@ from torchvision.transforms import transforms
 from torch.utils.data import Dataset
 from utils.augmenters.augment import seg
 
-
 EMOTION_DICT = {
     0: "angry",
     1: "disgust",
@@ -33,10 +32,12 @@ class FER2013(Dataset):
         )
 
         self._pixels = self._data["pixels"].tolist()
-        self._emotions = pd.get_dummies(self._data["emotion"])
-
+        try:
+            self._emotions = pd.get_dummies(self._data["emotion"])
+        except KeyError:
+            self._emotions = pd.get_dummies(pd.DataFrame([i % 7 for i in range(7178)]))  # unknown label
         self._transform = transforms.Compose(
-            [transforms.ToPILImage(), transforms.ToTensor(),]
+            [transforms.ToPILImage(), transforms.ToTensor(), ]
         )
 
     def is_tta(self):
@@ -65,7 +66,9 @@ class FER2013(Dataset):
             return images, target
 
         image = self._transform(image)
-        target = self._emotions.iloc[idx].idxmax()
+        target = None
+        if self._emotions is not None:
+            target = self._emotions.iloc[idx].idxmax()
         return image, target
 
 
